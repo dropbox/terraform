@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/config/module"
+	"github.com/hashicorp/hcl"
 )
 
 // InputMode defines what sort of input will be asked for when Input
@@ -76,6 +77,23 @@ type Context struct {
 	runCh               <-chan struct{}
 }
 
+func parseVariableAsHCL(input string) (interface{}, error) {
+	const sentinalValue = "SENTINAL_TERRAFORM_VAR_OVERRIDE_KEY"
+	inputWithSentinal := fmt.Sprintf("%s = %s", sentinalValue, input)
+
+	var decoded map[string]interface{}
+	err := hcl.Decode(&decoded, inputWithSentinal)
+	if err != nil {
+		return nil, fmt.Errorf("TODO(jen20): Error")
+	}
+
+	if len(decoded) != 1 {
+		return nil, fmt.Errorf("TODO(jen20): Error")
+	}
+
+	return decoded[sentinalValue], nil
+}
+
 // NewContext creates a new Context structure.
 //
 // Once a Context is creator, the pointer values within ContextOpts
@@ -132,8 +150,25 @@ func NewContext(opts *ContextOpts) (*Context, error) {
 		k := v[len(VarEnvPrefix):idx]
 		v = v[idx+1:]
 
-		// Override the command-line set variable
-		variables[k] = v
+		// Override the command line set variable. Note that *not* finding the variable
+		// in configuration is OK, as we don't want to preclude people from having multiple
+		// sets of TF_VAR_whatever in their environment even if it is a little weird.
+		for _, schema := range opts.Module.Config().Variables {
+			if schema.Name == k {
+				varType := schema.Type()
+				switch varType {
+				case config.VariableTypeString:
+					variables[k] = v
+				case config.VariableTypeMap, config.VariableTypeList:
+					varVal, err := parseVariableAsHCL(v)
+					if err != nil {
+						return nil, fmt.Errorf("cannot parse value from environment variable %s, %q as valid HCL",
+							fmt.Sprintf("TF_VAR_%s", k), v)
+					}
+					variables[k] = varVal
+				}
+			}
+		}
 	}
 	for k, v := range opts.Variables {
 		variables[k] = v
